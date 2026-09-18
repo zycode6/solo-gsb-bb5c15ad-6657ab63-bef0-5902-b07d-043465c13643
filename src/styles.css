@@ -743,3 +743,218 @@ tr.summary-aggregated {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* ---------- 主机地址分配 ---------- */
+.host-panel {
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+.host-panel.is-disabled {
+  opacity: 0.85;
+}
+
+.host-summary-line {
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+
+.host-invalid-count {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.host-owner {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.host-owner-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.host-owner-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.host-owner-cidr {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.host-owner-range {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.host-remaining {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.host-remaining strong {
+  color: var(--auto);
+  font-size: 14px;
+}
+
+.host-remaining.is-zero strong {
+  color: var(--danger);
+}
+
+.host-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.host-name-input {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+
+.host-ip-input {
+  flex: 1 1 150px;
+  min-width: 130px;
+}
+
+.host-add-btn {
+  flex-shrink: 0;
+}
+
+.host-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.host-mode input {
+  accent-color: var(--accent);
+  width: auto;
+  margin: 0;
+}
+
+.host-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.host-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 4px 12px;
+}
+
+.host-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.35);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.host-list li.is-invalid {
+  background: rgba(248, 113, 113, 0.1);
+  outline: 1px solid rgba(248, 113, 113, 0.35);
+}
+
+.host-device {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.host-addr {
+  color: var(--text);
+}
+
+.host-mode-badge {
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.host-mode-badge.auto {
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.4);
+}
+
+.host-invalid-tag {
+  color: var(--danger);
+  font-size: 11px;
+  white-space: normal;
+  flex: 1 1 auto;
+}
+
+button.icon.host-del {
+  margin-left: auto;
+  padding: 2px 8px;
+  flex-shrink: 0;
+}
+
+.host-empty-line {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
+.host-invalid-box {
+  margin-top: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(248, 113, 113, 0.06);
+}
+
+.host-invalid-title {
+  font-size: 13px;
+  margin: 0 0 8px;
+  color: #fca5a5;
+}
+
+tr.host-invalid-row td {
+  vertical-align: middle;
+}
+
+td.host-invalid-reason {
+  white-space: normal;
+  color: var(--danger);
+  font-size: 12px;
+  max-width: 420px;
+}
+
+.host-relocate-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  margin-right: 6px;
+}
+
+.host-remove-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+}

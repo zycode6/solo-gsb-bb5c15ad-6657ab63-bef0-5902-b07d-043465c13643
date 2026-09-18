@@ -1,7 +1,15 @@
 import { buildBaseline, compareWithBaseline, mergeRanges } from '../src/lib/baseline'
+import {
+  addHostAssignment,
+  firstFreeAddress,
+  hostIssueText,
+  hostOwnersOfPlan,
+  reconcileHosts,
+} from '../src/lib/hosts'
 import { ipToInt, prefixForHosts } from '../src/lib/ip'
 import { plan } from '../src/lib/planner'
 import { blocksToCidrList, summarizeSegments } from '../src/lib/summary'
+import type { HostAssignment } from '../src/lib/hosts'
 import type { PlannerInput, Segment } from '../src/lib/types'
 
 let failures = 0
@@ -635,6 +643,207 @@ check(
   '全选示例覆盖 = 100/25+40/26+32/27+4/30 = 228',
   full.totalAddresses === 228,
   String(full.totalAddresses),
+)
+
+// 15) 主机地址分配
+const hostInput: PlannerInput = {
+  parentCidr: '192.168.10.0/24',
+  reservations: [{ id: 'r1', name: '保留', cidr: '192.168.10.0/28' }],
+  requirements: [
+    { id: 'q1', name: '办公', hosts: 100, cidr: '' },
+    { id: 'q3', name: '监控固定', hosts: 25, cidr: '192.168.10.32/27' },
+    { id: 'q4', name: '管理', hosts: 2, cidr: '' },
+  ],
+}
+const hp = plan(hostInput)
+check('主机场景无错误', hp.inputErrors.length === 0, JSON.stringify(hp.inputErrors))
+const owners = hostOwnersOfPlan(hp)
+const ownerById = new Map(owners.map((o) => [o.ownerId, o]))
+check('可登记网段仅含固定/自动（3 个，保留区不可登记）', owners.length === 3, String(owners.length))
+const q4 = ownerById.get('q4')!
+check('管理 /30 可用范围 .17~.18', q4.firstUsable === ipToInt('192.168.10.17') && q4.lastUsable === ipToInt('192.168.10.18'))
+const q3o = ownerById.get('q3')!
+
+// 15a) 自动取首个未占用
+let hosts: HostAssignment[] = []
+const a1 = addHostAssignment(hosts, { owner: q4, deviceName: '网关', mode: 'auto', now: () => 't1' })
+check('自动添加成功并取首个可用 .17', a1.ok && a1.assignment?.address === ipToInt('192.168.10.17'), String(a1))
+if (a1.assignment) hosts.push(a1.assignment)
+const a2 = addHostAssignment(hosts, { owner: q4, deviceName: '备机', mode: 'auto', now: () => 't2' })
+check('第二次自动取 .18', a2.ok && a2.assignment?.address === ipToInt('192.168.10.18'))
+if (a2.assignment) hosts.push(a2.assignment)
+const used4 = new Set(hosts.filter((h) => h.ownerId === 'q4').map((h) => h.address))
+check('占满后无空闲地址', firstFreeAddress(q4, used4) === null)
+const a3 = addHostAssignment(hosts, { owner: q4, deviceName: '第三台', mode: 'auto' })
+check('占满后自动添加被拒（full）', !a3.ok && a3.error?.code === 'full', String(a3.error))
+
+// 15b) 手动输入校验：非法 IPv4 / 网络地址 / 广播地址 / 越界 / 重复
+const badIp = addHostAssignment(hosts, { owner: q3o, deviceName: 'd', mode: 'manual', manualIp: '999.1.1.1' })
+check('非法 IPv4 被拒', !badIp.ok && badIp.error?.code === 'invalid-ip')
+const net = addHostAssignment(hosts, { owner: q3o, deviceName: 'd', mode: 'manual', manualIp: '192.168.10.32' })
+check('网络地址被拒', !net.ok && net.error?.code === 'network-or-broadcast', String(net.error))
+const bcast = addHostAssignment(hosts, { owner: q3o, deviceName: 'd', mode: 'manual', manualIp: '192.168.10.63' })
+check('广播地址被拒', !bcast.ok && bcast.error?.code === 'network-or-broadcast')
+const outsideSeg = addHostAssignment(hosts, { owner: q3o, deviceName: 'd', mode: 'manual', manualIp: '192.168.10.17' })
+check('不在所属网段被拒', !outsideSeg.ok && outsideSeg.error?.code === 'out-of-subnet', String(outsideSeg.error))
+const dup = addHostAssignment(hosts, { owner: q4, deviceName: 'd', mode: 'manual', manualIp: '192.168.10.17' })
+check('重复地址被拒', !dup.ok && dup.error?.code === 'duplicate')
+const noName = addHostAssignment(hosts, { owner: q3o, deviceName: '  ', mode: 'auto' })
+check('空设备名被拒', !noName.ok && noName.error?.code === 'empty-name')
+const okManual = addHostAssignment(hosts, { owner: q3o, deviceName: '服务器', mode: 'manual', manualIp: '192.168.10.40' })
+check('合法手动地址通过', okManual.ok && okManual.assignment?.address === ipToInt('192.168.10.40'))
+if (okManual.assignment) hosts.push(okManual.assignment)
+// 网络/广播地址绝不会被自动选中：在 /30 中只剩 0 个可用时直接 full，不会退回 .16/.19
+check('自动模式绝不分配网络/广播地址', used4.has(ipToInt('192.168.10.16')) === false && used4.has(ipToInt('192.168.10.19')) === false)
+
+// 15c) 剩余可用数
+const rec1 = reconcileHosts(hosts, hp)
+const q4view = rec1.ownerById.get('q4')!
+check('/30 剩余 0、已用 2', q4view.remaining === 0 && q4view.used === 2, String([q4view.remaining, q4view.used]))
+const q3view = rec1.ownerById.get('q3')!
+check('/27 剩余 29（30 可用 - 1 登记）', q3view.remaining === 29 && q3view.used === 1, String(q3view.remaining))
+check('全部登记当前有效', rec1.invalidHosts.length === 0 && rec1.validHosts.length === hosts.length)
+
+// 15d) 重新规划：未变化 -> 全部稳定保留
+const recSame = reconcileHosts(hosts, plan(hostInput))
+check('规划未变：登记全部保留', recSame.invalidHosts.length === 0 && recSame.validHosts.length === hosts.length)
+
+// 15e) 网段迁移导致地址失效：把 q4 改为固定网段 192.168.10.20/30（原自动段在 .16/30），
+//  成功分配但 CIDR 改变 -> 原 .17/.18 越界失效；q1 自动 /25 落到 .128；q3 固定段不动 -> 其登记保留
+const movedInput: PlannerInput = {
+  parentCidr: '192.168.10.0/24',
+  reservations: [{ id: 'r1', name: '保留', cidr: '192.168.10.0/28' }],
+  requirements: [
+    { id: 'q1', name: '办公', hosts: 100, cidr: '' },
+    { id: 'q3', name: '监控固定', hosts: 25, cidr: '192.168.10.32/27' },
+    { id: 'q4', name: '管理', hosts: 2, cidr: '192.168.10.20/30' },
+  ],
+}
+const movedPlan = plan(movedInput)
+check('迁移场景无错误', movedPlan.inputErrors.length === 0, JSON.stringify(movedPlan.inputErrors))
+check('q4 成功迁移到 192.168.10.20/30', movedPlan.segments.some((s) => s.ownerId === 'q4' && s.cidr === '192.168.10.20/30'))
+const recMoved = reconcileHosts(hosts, movedPlan)
+const movedQ4 = recMoved.invalidHosts.filter((h) => h.ownerId === 'q4')
+check(
+  '迁移后 q4 的 2 条登记标记 owner-moved 且地址原样保留',
+  movedQ4.length === 2 &&
+    movedQ4.every((h) => h.issues.includes('owner-moved')) &&
+    movedQ4.some((h) => h.address === ipToInt('192.168.10.17')) &&
+    movedQ4.some((h) => h.address === ipToInt('192.168.10.18')),
+  JSON.stringify(movedQ4.map((h) => [h.address, h.issues])),
+)
+check('失效说明包含新旧网段且不静默改址', /192\.168\.10\.16\/30/.test(hostIssueText(movedQ4[0])) && /192\.168\.10\.20\/30/.test(hostIssueText(movedQ4[0])))
+const keptQ3 = recMoved.validHosts.filter((h) => h.ownerId === 'q3')
+check('固定段 q3 未动：其登记继续有效', keptQ3.length === 1 && keptQ3[0].address === ipToInt('192.168.10.40'))
+check('剩余可用数只统计有效登记（失效不计占用，新 /30 剩余 2）', recMoved.ownerById.get('q4')!.remaining === 2)
+
+// 15f) 需求删除 -> owner-deleted；分配失败 -> owner-unallocated
+const deletedRec = reconcileHosts(
+  hosts,
+  plan({
+    parentCidr: '192.168.10.0/24',
+    reservations: [{ id: 'r1', name: '保留', cidr: '192.168.10.0/28' }],
+    requirements: [
+      { id: 'q1', name: '办公', hosts: 100, cidr: '' },
+      { id: 'q3', name: '监控固定', hosts: 25, cidr: '192.168.10.32/27' },
+    ],
+  }),
+)
+check(
+  '删除 q4：其登记标 owner-deleted 且保留名称/地址',
+  deletedRec.invalidHosts.some(
+    (h) => h.ownerId === 'q4' && h.issues.includes('owner-deleted') && h.address === ipToInt('192.168.10.17'),
+  ),
+)
+// 两个 /25 保留区堵死所有 /25 对齐点：q1(100 台) 分配失败，但无输入错误
+const failPlan = plan({
+  parentCidr: '192.168.10.0/24',
+  reservations: [
+    { id: 'r1', name: '保留A', cidr: '192.168.10.0/25' },
+    { id: 'r2', name: '保留B', cidr: '192.168.10.128/25' },
+  ],
+  requirements: [{ id: 'q1', name: '办公', hosts: 100, cidr: '' }],
+})
+check('占满父网段场景仅有失败需求、无输入错误', failPlan.inputErrors.length === 0 && failPlan.failures.length === 1, JSON.stringify(failPlan.inputErrors))
+// 取 q1 在先前成功规划中的登记（其 /25 位于 .128，登记 .200 为可用地址）
+const q1owner = hostOwnersOfPlan(plan({ ...hostInput, requirements: [{ id: 'q1', name: '办公', hosts: 100, cidr: '' }] }))[0]
+const hostOnFail: HostAssignment[] = [
+  {
+    id: 'h-fail',
+    ownerId: 'q1',
+    ownerName: '办公',
+    ownerCidr: q1owner.cidr,
+    deviceName: '旧主机',
+    address: q1owner.firstUsable + 100,
+    mode: 'manual',
+    createdAt: 't0',
+  },
+]
+const recFail = reconcileHosts(hostOnFail, failPlan, failPlan.failures)
+check(
+  '分配失败的需求登记标 owner-unallocated（不静默改址、不删除）',
+  recFail.invalidHosts.length === 1 && recFail.invalidHosts[0].issues.includes('owner-unallocated') &&
+    recFail.invalidHosts[0].address === hostOnFail[0].address,
+  JSON.stringify(recFail.invalidHosts.map((h) => h.issues)),
+)
+
+// 15g) 主机分配完全不影响规划/汇总：同一输入两次规划结果一致，汇总忽略主机登记
+const planAgain = plan(hostInput)
+check(
+  '主机登记不改变规划结果',
+  JSON.stringify(planAgain.segments.map((s) => s.cidr)) === JSON.stringify(hp.segments.map((s) => s.cidr)),
+)
+check(
+  '路由汇总不读取主机登记',
+  summarizeSegments(planAgain.segments.filter((s) => s.kind === 'fixed' || s.kind === 'auto')).totalAddresses ===
+    summarizeSegments(hp.segments.filter((s) => s.kind === 'fixed' || s.kind === 'auto')).totalAddresses,
+)
+
+// 15h) 原主机地址在新网段中恰好成为网络/广播地址也要判失效（不静默改址）
+//  原固定段 0/30 主机 .1；改为固定段 0/31 不允许（最小 /30），故用 /24 内：原 .16/30 的主机 .17，
+//  当需求改为保留该地址所在更大边界——直接构造对账数据：owner 为 16/29（.16–.23，可用 .17~.22）时 .17 合法；
+//  以「新段网络地址 = 旧主机地址」校验：把 owner 伪造成 .17/32 不可行，改为验证可用范围排除规则已覆盖
+//  firstUsable=network+1、lastUsable=broadcast-1，因此等于网络/广播的地址必然越界。
+const edgeOwner = hostOwnersOfPlan(
+  plan({
+    parentCidr: '192.168.10.0/24',
+    reservations: [],
+    requirements: [{ id: 'q9', name: '段', hosts: 6, cidr: '192.168.10.16/29' }],
+  }),
+)[0]
+const edgeRec = reconcileHosts(
+  [
+    {
+      id: 'h-net',
+      ownerId: 'q9',
+      ownerName: '段',
+      ownerCidr: '192.168.10.0/30', // 登记时在别的段（.16 是其广播地址）
+      deviceName: '踩新网络地址',
+      address: edgeOwner.network, // = .16，恰好是新段网络地址
+      mode: 'manual',
+      createdAt: 't',
+    },
+    {
+      id: 'h-bcast',
+      ownerId: 'q9',
+      ownerName: '段',
+      ownerCidr: '192.168.10.24/30',
+      deviceName: '踩新广播地址',
+      address: edgeOwner.broadcast, // = .23，恰好是新段广播地址
+      mode: 'manual',
+      createdAt: 't',
+    },
+  ],
+  plan({
+    parentCidr: '192.168.10.0/24',
+    reservations: [],
+    requirements: [{ id: 'q9', name: '段', hosts: 6, cidr: '192.168.10.16/29' }],
+  }),
+)
+check(
+  '原地址成为新网络/广播地址均判 owner-moved 失效',
+  edgeRec.invalidHosts.length === 2 && edgeRec.invalidHosts.every((h) => h.issues.includes('owner-moved')),
+  JSON.stringify(edgeRec.invalidHosts.map((h) => [h.address, h.issues])),
 )
 
 console.log(failures === 0 ? '\n全部测试通过 ✅' : `\n${failures} 个测试失败 ❌`)
