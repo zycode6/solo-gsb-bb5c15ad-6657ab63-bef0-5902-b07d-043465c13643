@@ -743,3 +743,191 @@ tr.summary-aggregated {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* ---------- 主机地址分配 ---------- */
+.host-panel {
+  border-color: rgba(250, 204, 21, 0.35);
+}
+
+.host-panel.is-disabled {
+  opacity: 0.85;
+}
+
+.host-summary-meta {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.host-invalid-count {
+  color: var(--danger);
+}
+
+.host-clear-invalid {
+  margin-left: 10px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.host-segment {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.host-seg-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.host-seg-head .badge {
+  margin-left: 0;
+}
+
+.host-seg-name {
+  font-weight: 600;
+}
+
+.host-seg-cidr {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.host-seg-range {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.host-seg-remain {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.host-seg-remain strong {
+  color: var(--auto);
+  font-size: 14px;
+}
+
+.host-seg-remain.is-zero strong {
+  color: var(--danger);
+}
+
+.host-table {
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.host-table td {
+  padding: 5px 8px;
+  white-space: normal;
+  vertical-align: middle;
+}
+
+.host-table .host-device-name {
+  min-width: 120px;
+}
+
+.host-table .host-addr {
+  min-width: 130px;
+  width: 150px;
+}
+
+.host-table .host-addr input {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.host-mode {
+  display: inline-block;
+  font-size: 11px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.host-mode.auto {
+  background: rgba(56, 189, 248, 0.14);
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.4);
+}
+
+.host-mode.manual {
+  background: rgba(167, 139, 250, 0.14);
+  color: #c4b5fd;
+  border-color: rgba(167, 139, 250, 0.4);
+}
+
+.host-reason {
+  font-size: 12px;
+}
+
+.host-invalid-tag {
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 6px;
+  padding: 1px 8px;
+  display: inline-block;
+}
+
+.host-addr-bad {
+  color: var(--danger);
+  text-decoration: line-through;
+  text-decoration-color: rgba(248, 113, 113, 0.6);
+}
+
+tr.host-invalid-row {
+  background: rgba(248, 113, 113, 0.07);
+}
+
+.host-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.host-actions button {
+  padding: 3px 10px;
+  font-size: 12px;
+  margin-left: 6px;
+}
+
+.host-form-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 2px 2px 4px;
+}
+
+.host-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.3fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 900px) {
+  .host-add-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.host-orphans {
+  background: rgba(248, 113, 113, 0.06);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.host-orphans h3 {
+  font-size: 13px;
+  margin: 0 0 8px;
+  color: #fca5a5;
+}

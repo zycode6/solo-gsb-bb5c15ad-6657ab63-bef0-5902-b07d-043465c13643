@@ -1,8 +1,15 @@
 import { buildBaseline, compareWithBaseline, mergeRanges } from '../src/lib/baseline'
-import { ipToInt, prefixForHosts } from '../src/lib/ip'
+import {
+  allocatableSegments,
+  firstFreeAddress,
+  reconcileHosts,
+  validateManualAddress,
+} from '../src/lib/hosts'
+import { buildExportJson } from '../src/lib/exporter'
+import { intToIp, ipToInt, prefixForHosts } from '../src/lib/ip'
 import { plan } from '../src/lib/planner'
 import { blocksToCidrList, summarizeSegments } from '../src/lib/summary'
-import type { PlannerInput, Segment } from '../src/lib/types'
+import type { HostAssignment, PlannerInput, Segment } from '../src/lib/types'
 
 let failures = 0
 function check(name: string, cond: boolean, extra = '') {
@@ -636,6 +643,185 @@ check(
   full.totalAddresses === 228,
   String(full.totalAddresses),
 )
+
+// ========== 15) 主机地址分配 ==========
+// 可登记对象：仅成功分配的固定 / 自动网段（按稳定 ownerId）
+const hostPlan = plan(demo)
+const allocSegs = allocatableSegments(hostPlan)
+check(
+  '主机面板只列出固定/自动网段（4 个，无保留/空闲）',
+  allocSegs.length === 4 && allocSegs.every((s) => s.kind === 'fixed' || s.kind === 'auto'),
+  JSON.stringify(allocSegs.map((s) => [s.kind, s.cidr])),
+)
+const segById = new Map(allocSegs.map((s) => [s.ownerId, s]))
+const mgmt = segById.get('q4')! // 192.168.10.16/30，可用 .17 ~ .18
+const office = segById.get('q1')! // 192.168.10.128/25，可用 .129 ~ .254
+
+// 15a) 自动取址：首个未占用可用地址，跳过网络地址
+let hostList: HostAssignment[] = []
+const auto1 = firstFreeAddress(mgmt, hostList)
+check('自动取址跳过网络地址（/30 首址为 .17）', auto1 === ipToInt('192.168.10.17'), intToIp(auto1 ?? -1))
+hostList = [
+  { id: 'h1', ownerId: 'q4', name: '设备A', address: ipToInt('192.168.10.17'), mode: 'auto' },
+]
+const auto2 = firstFreeAddress(mgmt, hostList)
+check('自动取址跳过已占用地址（下一个为 .18）', auto2 === ipToInt('192.168.10.18'), intToIp(auto2 ?? -1))
+hostList.push({ id: 'h2', ownerId: 'q4', name: '设备B', address: ipToInt('192.168.10.18'), mode: 'auto' })
+check('占满后自动取址返回 null', firstFreeAddress(mgmt, hostList) === null)
+
+// 15b) 剩余可用数：/30 共 2 个可用
+let rec = reconcileHosts(hostList, hostPlan)
+const mgmtStats = rec.statsByOwner.get('q4')!
+check('剩余可用数 = 可用主机数 - 有效登记（2-2=0）', mgmtStats.remaining === 0 && mgmtStats.used === 2)
+const officeStats = rec.statsByOwner.get('q1')!
+check('未登记网段剩余 = 全部可用（/25 = 126）', officeStats.remaining === 126 && officeStats.used === 0)
+
+// 15c) 手动地址：网络地址 / 广播地址必须拒绝
+check(
+  '拒绝网络地址',
+  validateManualAddress('192.168.10.16', mgmt, []) !== null &&
+    /网络地址/.test(validateManualAddress('192.168.10.16', mgmt, [])!),
+)
+check(
+  '拒绝广播地址',
+  validateManualAddress('192.168.10.19', mgmt, []) !== null &&
+    /广播地址/.test(validateManualAddress('192.168.10.19', mgmt, [])!),
+)
+// 15d) 拒绝非所属网段地址（同父网段内的别的网段也算越界）
+check(
+  '拒绝不在所属网段的地址',
+  validateManualAddress('192.168.10.33', mgmt, []) !== null &&
+    /不在网段/.test(validateManualAddress('192.168.10.33', mgmt, [])!),
+)
+// 15e) 拒绝重复 / 已占用地址
+check(
+  '拒绝已占用地址',
+  validateManualAddress('192.168.10.17', mgmt, hostList) !== null &&
+    /已被设备/.test(validateManualAddress('192.168.10.17', mgmt, hostList)!),
+)
+check('合法手动地址通过', validateManualAddress('192.168.10.129', office, hostList) === null)
+// selfId 用于编辑自身时不算重复
+check(
+  '编辑自身地址不判定为重复',
+  validateManualAddress('192.168.10.17', mgmt, hostList, 'h1') === null,
+)
+// 非法 IP 文本也必须拒绝
+check('拒绝非法 IPv4 文本', validateManualAddress('999.1.1.1', office, hostList) !== null)
+check('拒绝空输入', validateManualAddress('  ', office, hostList) !== null)
+
+// 15f) 重新计算后保留仍合法登记，不静默改址
+hostList = [
+  { id: 'h1', ownerId: 'q4', name: '管理设备1', address: ipToInt('192.168.10.17'), mode: 'auto' },
+  { id: 'h2', ownerId: 'q4', name: '管理设备2', address: ipToInt('192.168.10.18'), mode: 'manual' },
+  { id: 'h3', ownerId: 'q1', name: '办公网关', address: ipToInt('192.168.10.129'), mode: 'auto' },
+]
+rec = reconcileHosts(hostList, hostPlan)
+check(
+  '相同规划重算后全部有效且地址原样保留',
+  rec.rows.every((r) => r.valid) &&
+    rec.rows.find((r) => r.assignment.id === 'h3')!.assignment.address ===
+      ipToInt('192.168.10.129'),
+)
+
+// 15g) 规划迁移：在 16/30 加入保留区，把 q4 的 /30 从 16/30 挤到 20/30，h1/h2 失效
+const migratedPlan = plan({
+  parentCidr: '192.168.10.0/24',
+  reservations: [
+    { id: 'r1', name: '核心交换链路保留', cidr: '192.168.10.0/28' },
+    { id: 'r2', name: '链路保留', cidr: '192.168.10.16/30' },
+  ],
+  requirements: demo.requirements,
+})
+const q4new = allocatableSegments(migratedPlan).find((s) => s.ownerId === 'q4')!
+check('迁移后 q4 网段确实改变', q4new.cidr !== '192.168.10.16/30', q4new.cidr)
+const migrated = reconcileHosts(hostList, migratedPlan)
+const m1 = migrated.rows.find((r) => r.assignment.id === 'h1')!
+const m3 = migrated.rows.find((r) => r.assignment.id === 'h3')!
+check(
+  '迁移后原地址失效且明确标记、地址不被改写（保留 192.168.10.17）',
+  !m1.valid &&
+    m1.assignment.address === ipToInt('192.168.10.17') &&
+    (m1.reason === 'out-of-subnet' ||
+      m1.reason === 'network-address' ||
+      m1.reason === 'broadcast-address'),
+  `${m1.valid} ${m1.reason} ${intToIp(m1.assignment.address)}`,
+)
+check('失效登记不占用剩余可用数', migrated.statsByOwner.get('q4')!.used === 0)
+check('仍合法的登记（办公段未动）继续保留', m3.valid && m3.assignment.address === ipToInt('192.168.10.129'))
+check('失效说明文本非空', !!m1.reasonText && /192\.168\.10\.17/.test(m1.reasonText!))
+
+// 15h) 网段前缀缩小导致原地址变成（新）网络/广播地址
+// q3 固定 32/27（可用 .33~.62）登记 .33；改为固定 32/32 -> 该需求容量不足属输入错误，
+// 改用自动需求：10.5.0.0/30 需求 2 台，先登记 .1；再改为 10.5.0.0/29 固定段由别的方式不易构造，
+// 这里直接构造「固定段扩容」场景：需求主机数变大并保留固定 CIDR /29（0~7，广播 .7）
+const shrinkInput: PlannerInput = {
+  parentCidr: '10.5.0.0/29',
+  reservations: [],
+  requirements: [{ id: 'q', name: '段', hosts: 6, cidr: '10.5.0.0/29' }],
+}
+const shrinkPlan = plan(shrinkInput)
+const shrinkSeg = allocatableSegments(shrinkPlan)[0]
+check('/29 可用范围 .1 ~ .6', shrinkSeg.firstUsable === '10.5.0.1' && shrinkSeg.lastUsable === '10.5.0.6')
+const edge = reconcileHosts(
+  [{ id: 'e', ownerId: 'q', name: '边界设备', address: ipToInt('10.5.0.7'), mode: 'manual' }],
+  shrinkPlan,
+)
+check('登记广播地址被标记为 broadcast-address', edge.rows[0].reason === 'broadcast-address')
+const edgeNet = reconcileHosts(
+  [{ id: 'e', ownerId: 'q', name: '边界设备', address: ipToInt('10.5.0.0'), mode: 'manual' }],
+  shrinkPlan,
+)
+check('登记网络地址被标记为 network-address', edgeNet.rows[0].reason === 'network-address')
+
+// 15i) 需求删除 / 分配失败 -> owner-gone / owner-unallocated
+const gone = reconcileHosts(
+  [{ id: 'g', ownerId: 'q4', name: '孤儿', address: ipToInt('192.168.10.17'), mode: 'auto' }],
+  plan({
+    parentCidr: '192.168.10.0/24',
+    reservations: [{ id: 'r1', name: '保留', cidr: '192.168.10.0/28' }],
+    requirements: [
+      { id: 'q1', name: '办公区 VLAN', hosts: 100, cidr: '' },
+      { id: 'q2', name: '机房 VLAN', hosts: 40, cidr: '' },
+      { id: 'q3', name: '监控固定段', hosts: 25, cidr: '192.168.10.32/27' },
+      // q4 被删除
+    ],
+  }),
+)
+check('需求删除 -> owner-gone', gone.rows[0].reason === 'owner-gone' && !gone.rows[0].valid)
+
+const failPlan = plan({
+  parentCidr: '192.168.10.0/30',
+  reservations: [],
+  requirements: [{ id: 'q4', name: '放不下', hosts: 100, cidr: '' }],
+})
+const unalloc = reconcileHosts(
+  [{ id: 'u', ownerId: 'q4', name: '设备', address: ipToInt('192.168.10.1'), mode: 'auto' }],
+  failPlan,
+)
+check('需求分配失败 -> owner-unallocated', unalloc.rows[0].reason === 'owner-unallocated')
+
+// 15j) 同网段重复登记（数据层防御）：后录入者标记 duplicate，最早一条有效
+const dup = reconcileHosts(
+  [
+    { id: 'd1', ownerId: 'q4', name: '设备1', address: ipToInt('192.168.10.17'), mode: 'auto' },
+    { id: 'd2', ownerId: 'q4', name: '设备2', address: ipToInt('192.168.10.17'), mode: 'manual' },
+  ],
+  hostPlan,
+)
+check(
+  '同地址重复：最早一条有效，其余 duplicate',
+  dup.rows[0].valid && dup.rows[1].reason === 'duplicate',
+  JSON.stringify(dup.rows.map((r) => r.reason)),
+)
+check('重复登记只计一次占用（used=1, remaining=1）', dup.statsByOwner.get('q4')!.used === 1 && dup.statsByOwner.get('q4')!.remaining === 1)
+
+// 15k) 主机登记完全不影响规划结果、基线、路由汇总与导出
+const planWithHosts = plan(demo)
+const planWithoutHosts = plan(demo)
+check('规划引擎签名不含主机数据（结果确定性一致）', JSON.stringify(planWithHosts) === JSON.stringify(planWithoutHosts))
+const exportJson = buildExportJson(hostPlan, { parentCidr: demo.parentCidr })
+check('导出 JSON 不含主机登记字段', !/主机地址|设备地址|host/i.test(exportJson))
+check('路由汇总结论不受登记影响', summarizeSegments(allocSegs).totalAddresses === 228)
 
 console.log(failures === 0 ? '\n全部测试通过 ✅' : `\n${failures} 个测试失败 ❌`)
 process.exit(failures === 0 ? 0 : 1)

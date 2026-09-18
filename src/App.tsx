@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import AddressBar from './components/AddressBar'
 import BaselinePanel from './components/BaselinePanel'
+import HostAddressPanel from './components/HostAddressPanel'
 import RouteSummaryPanel from './components/RouteSummaryPanel'
 import SegmentDetail from './components/SegmentDetail'
 import SegmentTable from './components/SegmentTable'
@@ -14,7 +15,12 @@ import {
 } from './lib/baseline'
 import { downloadJson } from './lib/exporter'
 import { plan } from './lib/planner'
-import type { Baseline, RequirementInput, ReservedInput } from './lib/types'
+import type {
+  Baseline,
+  HostAssignment,
+  RequirementInput,
+  ReservedInput,
+} from './lib/types'
 
 let counter = 0
 function uid(): string {
@@ -40,6 +46,8 @@ export default function App() {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   // 基线只存在于当前浏览器会话（sessionStorage），挂载时恢复
   const [baseline, setBaseline] = useState<Baseline | null>(() => loadBaseline())
+  // 主机地址登记仅在当前会话内存中保留；与规划引擎、基线、汇总、导出完全解耦
+  const [hostAssignments, setHostAssignments] = useState<HostAssignment[]>([])
 
   const result = useMemo(
     () => plan({ parentCidr, reservations, requirements }),
@@ -90,6 +98,7 @@ export default function App() {
     setReservations(DEMO.reservations.map((r) => ({ ...r })))
     setRequirements(DEMO.requirements.map((r) => ({ ...r })))
     setSelectedIndex(null)
+    setHostAssignments([])
   }
 
   function clearAll() {
@@ -97,6 +106,7 @@ export default function App() {
     setReservations([])
     setRequirements([])
     setSelectedIndex(null)
+    setHostAssignments([])
   }
 
   const hasInput =
@@ -299,6 +309,12 @@ export default function App() {
       />
 
       <RouteSummaryPanel result={result} />
+
+      <HostAddressPanel
+        result={result}
+        assignments={hostAssignments}
+        onAssignmentsChange={setHostAssignments}
+      />
 
       {result.segments.length > 0 && (
         <div className="panel">

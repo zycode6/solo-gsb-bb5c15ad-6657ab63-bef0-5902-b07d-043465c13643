@@ -160,3 +160,19 @@ export interface BaselineComparison {
   /** 当前相对基线是否有任何差异 */
   hasChanges: boolean
 }
+
+/* ---------- 主机地址分配 ---------- */
+
+/** 设备地址的登记方式：自动取首个未占用地址，或手动输入 IPv4 */
+export type HostAssignMode = 'auto' | 'manual'
+
+/** 一条主机地址登记（仅随当前会话中的输入存在，不参与规划/基线/汇总/导出） */
+export interface HostAssignment {
+  id: string
+  /** 所属需求的稳定 ID（固定/自动网段的 ownerId） */
+  ownerId: string
+  name: string
+  /** 登记地址（数值，始终保存用户最后确认的地址，失效时也不静默改写） */
+  address: number
+  mode: HostAssignMode
+}
